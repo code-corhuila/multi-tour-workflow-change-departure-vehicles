@@ -1,0 +1,193 @@
+openapi: 3.0.3
+info:
+  title: Multitour saga change-departure-vehicles
+  version: 0.1.0
+  description: >
+    Entry of the saga that changes the vehicles of a departure (ADR-004 D3, spec HU-WFL-005): the Tenant Administrator
+    asks for the whole new set of vehicles of one departure and reads the state of the saga. The saga first lowers the
+    ceiling of seats in commercial-reservation, refusing if more seats are held than the new ceiling, and then lets
+    operations-cost apply the change; if that fails it restores the previous ceiling. Both routes are for the Tenant
+    Administrator only, and the tenant is the one of the token, never of the body. Every error uses the single envelope
+    below and never carries the internal detail of a failure; the detail stays in the saga state and the log.
+paths:
+  /api/v1/sagas/change-departure-vehicles:
+    post:
+      summary: Start the change of the vehicles of a departure
+      description: >
+        Repeating the same Idempotency-Key returns the same saga with 200 and runs no step. The saga runs to its end
+        before answering: the answer already says COMPLETED, COMPENSATED or FAILED.
+      operationId: startChangeDepartureVehicles
+      tags: [Sagas]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartChangeDepartureVehiclesRequest"
+      responses:
+        "201":
+          description: The saga started and ended
+          headers:
+            Location:
+              description: URL of the saga
+              schema:
+                type: string
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "200":
+          description: The Idempotency-Key was already used; the existing saga
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/sagas/change-departure-vehicles/{id}:
+    get:
+      summary: Read the state of a change of vehicles
+      operationId: getChangeDepartureVehicles
+      tags: [Sagas]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The saga
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+  headers:
+    CorrelationId:
+      description: Reused from the request or generated
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error envelope
+      headers:
+        X-Correlation-Id:
+          $ref: "#/components/headers/CorrelationId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    StartChangeDepartureVehiclesRequest:
+      type: object
+      required: [departureCode, vehicleIds]
+      additionalProperties: false
+      properties:
+        departureCode:
+          type: string
+          minLength: 1
+          maxLength: 40
+          description: Code of the departure, as operations-cost shows it
+        vehicleIds:
+          type: array
+          description: The whole new set of vehicles of the departure, with no repeated id
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    Saga:
+      type: object
+      required: [id, status, departureCode, completedSteps, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [RUNNING, COMPLETED, COMPENSATED, FAILED]
+        departureCode:
+          type: string
+        completedSteps:
+          type: array
+          items:
+            type: string
+            enum: [LOWER_CEILING, APPLY_VEHICLES]
+        failedStep:
+          type: string
+          enum: [LOWER_CEILING, APPLY_VEHICLES]
+        reason:
+          type: string
+          description: A short code for why the saga did not complete, never the text of a participant
+          enum: [SEATS_HELD, VEHICLES_REFUSED, PARTICIPANT_UNAVAILABLE, COMPENSATION_FAILED]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error, message, traceId]
+      properties:
+        error:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INTERNAL_ERROR]
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        traceId:
+          type: string
+security:
+  - bearerAuth: []
