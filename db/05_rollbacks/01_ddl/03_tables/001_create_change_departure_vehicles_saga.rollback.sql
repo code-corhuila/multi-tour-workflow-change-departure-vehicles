@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS workflow_change_departure_vehicles.change_departure_vehicles_saga_step;
+DROP TABLE IF EXISTS workflow_change_departure_vehicles.change_departure_vehicles_saga;
