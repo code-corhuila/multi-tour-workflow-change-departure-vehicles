@@ -1,0 +1,18 @@
+databaseChangeLog:
+  - changeSet:
+      id: change-departure-vehicles-ddl-tables-001
+      author: Molina211
+      labels: "HU-WFL-005,ddl,tables"
+      comment: "The change-departure-vehicles saga and its steps, saved after every step so a restart can resume or compensate (Annex E, rule 2)."
+      changes:
+        - sqlFile:
+            path: 001_create_change_departure_vehicles_saga.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/001_create_change_departure_vehicles_saga.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
