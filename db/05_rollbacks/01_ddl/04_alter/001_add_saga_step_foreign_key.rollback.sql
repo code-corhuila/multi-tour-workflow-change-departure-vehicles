@@ -1,0 +1,1 @@
+ALTER TABLE workflow_change_departure_vehicles.change_departure_vehicles_saga_step DROP CONSTRAINT IF EXISTS fk_change_departure_vehicles_saga_step_saga;

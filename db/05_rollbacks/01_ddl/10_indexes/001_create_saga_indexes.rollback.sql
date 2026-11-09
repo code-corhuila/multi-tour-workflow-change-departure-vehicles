@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS workflow_change_departure_vehicles.idx_change_departure_vehicles_saga_status_updated_at;
