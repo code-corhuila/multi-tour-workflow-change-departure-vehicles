@@ -109,15 +109,20 @@ func TestC_operations_receives_the_preview_and_the_whole_new_set_of_vehicles(t *
 	}
 }
 
-// The code of a departure is text the person typed: it cannot climb out of its path.
+// The code of a departure is text the person typed: it cannot climb out of its path, so a code that is not plain is refused before any call.
 func TestC_the_departure_code_cannot_change_the_path(t *testing.T) {
 	srv := newServer(t, reply{200, ceilingOK})
-	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "../x?y=1#z", 10, "saga-1:LOWER_CEILING")
-	if err != nil {
-		t.Fatal(err)
+	for _, code := range []string{"../x", "a/b", "x?y=1", "x#z", "x y", "", strings.Repeat("A", 41), "%2e%2e"} {
+		_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, code, 10, "saga-1:LOWER_CEILING")
+		if !errors.Is(err, out.ErrRefused) {
+			t.Fatalf("code %q: err %v, want ErrRefused", code, err)
+		}
+		if err := participants.NewOperations(srv.URL, cfg).ApplyChange(context.Background(), tenant, code, []string{vehicle}, "k-1"); !errors.Is(err, out.ErrRefused) {
+			t.Fatalf("code %q on operations: err %v", code, err)
+		}
 	}
-	if p := srv.requests[0].Path; strings.Contains(p, "..") || strings.Contains(p, "?") || strings.Contains(p, "#") {
-		t.Fatalf("path %q", p)
+	if srv.count() != 0 {
+		t.Fatalf("%d calls were made with a code that is not plain", srv.count())
 	}
 }
 
@@ -132,8 +137,6 @@ func TestC_definite_answers_become_the_sentinels_of_the_port(t *testing.T) {
 		{"another 422", reply{422, `{"error":"INVALID_STATUS_TRANSITION","message":"x","traceId":"t"}`}, out.ErrRefused},
 		{"not found", reply{404, `{"error":"NOT_FOUND","message":"x","traceId":"t"}`}, out.ErrNotFound},
 		{"bad request", reply{400, `{"error":"VALIDATION_ERROR","message":"x","traceId":"t"}`}, out.ErrRefused},
-		{"forbidden", reply{403, `{"error":"FORBIDDEN","message":"x","traceId":"t"}`}, out.ErrRefused},
-		{"unauthorized", reply{401, `{"error":"UNAUTHORIZED","message":"x","traceId":"t"}`}, out.ErrRefused},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,6 +149,31 @@ func TestC_definite_answers_become_the_sentinels_of_the_port(t *testing.T) {
 				t.Fatalf("%d requests: a clear answer is not repeated", srv.count())
 			}
 		})
+	}
+}
+
+// A 401 or 403 is the token of the saga, a fault of configuration and not a decision about the change: it says nothing about the work, so
+// it is unclear and the saga is asked again after the token is fixed, instead of being reported as refused.
+func TestC_a_refused_token_is_an_unclear_answer_not_a_refusal(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		srv := newServer(t, reply{status, `{"error":"FORBIDDEN","message":"x","traceId":"t"}`})
+		_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+		if err == nil || errors.Is(err, out.ErrRefused) || errors.Is(err, out.ErrNotFound) || errors.Is(err, out.ErrSeatsHeld) {
+			t.Fatalf("status %d: err %v, want an unclear answer", status, err)
+		}
+	}
+}
+
+// The tenant comes from the token, but it goes into a path: a value that is not an id is refused before any call.
+func TestC_a_tenant_that_is_not_an_id_is_refused_before_any_call(t *testing.T) {
+	srv := newServer(t, reply{200, ceilingOK})
+	for _, bad := range []string{"", "..", "a/b", "not-a-uuid"} {
+		if _, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), bad, "SAL-013", 10, "k-1"); !errors.Is(err, out.ErrRefused) {
+			t.Fatalf("tenant %q: err %v", bad, err)
+		}
+	}
+	if srv.count() != 0 {
+		t.Fatalf("%d calls", srv.count())
 	}
 }
 
