@@ -26,6 +26,10 @@ type Limits struct {
 // Open connects, checks the database answers and returns the pool. The errors are fixed text plus the kind of failure:
 // the driver's own errors quote the connection string, and the connection string carries the password.
 func Open(ctx context.Context, url string, limits Limits) (*pgxpool.Pool, error) {
+	// a limit left at zero would be a connection that times out at once, no pool, or no statement timeout: refused, not defaulted
+	if limits.MaxConns < 1 || limits.ConnectTimeout <= 0 || limits.StatementTimeout <= 0 {
+		return nil, errors.New("the database limits must all be positive")
+	}
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, errors.New("DATABASE_URL cannot be parsed")
