@@ -12,13 +12,13 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/application/port/out"
 	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/correlation"
+	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/domain/saga"
 )
 
 const (
@@ -26,13 +26,6 @@ const (
 	maxBackoff     = 30 * time.Second
 	defaultTimeout = 5 * time.Second
 )
-
-// plainCode is the shape of the code of a departure. The code is text a person typed and goes into a path, so anything else is refused
-// before a call is made.
-var plainCode = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`)
-
-// uuidShape is the shape of the id of a tenant, which comes from the token but goes into a path.
-var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Config bounds every participant call (ADR-004 D10).
 type Config struct {
@@ -61,7 +54,7 @@ func newClient(baseURL string, cfg Config) *client {
 
 // departurePath is the path of a departure of a tenant on an internal route; the code must be plain.
 func departurePath(prefix, tenantID, code, rest string) (string, error) {
-	if !plainCode.MatchString(code) || !uuidShape.MatchString(tenantID) {
+	if !saga.ValidDepartureCode(code) || !saga.ValidID(tenantID) {
 		return "", fmt.Errorf("the tenant or the code of the departure is not plain: %w", out.ErrRefused)
 	}
 	return prefix + "/internal/tenants/" + url.PathEscape(tenantID) + "/departures/" + code + rest, nil
