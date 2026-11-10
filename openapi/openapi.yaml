@@ -14,8 +14,10 @@ paths:
     post:
       summary: Start the change of the vehicles of a departure
       description: >
-        Repeating the same Idempotency-Key returns the same saga with 200 and runs no step. The saga runs to its end
-        before answering: the answer already says COMPLETED, COMPENSATED or FAILED.
+        Repeating the same Idempotency-Key returns the same saga with 200 and runs no step. The saga runs before answering and
+        the answer already says COMPLETED, COMPENSATED or FAILED, except when a participant gave no clear answer: then it is
+        RUNNING, nothing is undone, and the saga goes on by itself (the same keys are asked again) until it ends or, after fifteen
+        minutes, FAILED for a person. A departure that does not exist is a 404.
       operationId: startChangeDepartureVehicles
       tags: [Sagas]
       parameters:
@@ -153,6 +155,7 @@ components:
           type: string
         completedSteps:
           type: array
+          description: The steps that ended, in order, including one that was undone afterwards; failedStep says where the saga stopped
           items:
             type: string
             enum: [LOWER_CEILING, APPLY_VEHICLES]
