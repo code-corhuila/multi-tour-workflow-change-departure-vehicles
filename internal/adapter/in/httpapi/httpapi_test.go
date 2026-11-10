@@ -151,7 +151,9 @@ func TestC_every_contract_operation_is_exercised(t *testing.T) {
 		uc   *fakeUseCase
 		want int
 	}
-	okUC := func(created bool) *fakeUseCase { return &fakeUseCase{started: completed(), created: created, found: completed()} }
+	okUC := func(created bool) *fakeUseCase {
+		return &fakeUseCase{started: completed(), created: created, found: completed()}
+	}
 	noAuth, forbidden := post(t, goodBody), post(t, goodBody)
 	noAuth.bearer, forbidden.bearer = "", platform
 	noKey, shortKey, notJSON, unknownField := post(t, goodBody), post(t, goodBody), post(t, `{"departureCode":`), post(t, strings.Replace(goodBody, `"vehicleIds"`, `"extra":1,"vehicleIds"`, 1))
