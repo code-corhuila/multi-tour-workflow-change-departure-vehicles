@@ -4,7 +4,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"regexp"
 	"time"
 
 	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/application/port/out"
@@ -29,8 +28,6 @@ const (
 		saga_status, coalesce(failed_step, ''), coalesce(failure_reason, ''), version, created_at, updated_at`
 )
 
-var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
 // Create inserts the saga as RUNNING and gives it its id. When the tenant already used the key, nothing is inserted and the existing
 // saga is returned with created false; the unique key makes two callers with one key take turns, so only one inserts.
 func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, error) {
@@ -52,7 +49,7 @@ func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, erro
 // the copy that is still the stored one (compare and swap on the version): a saga that ended is never overwritten and one moved by
 // another instance is refused, both as out.ErrStale. It returns the saga with its new version.
 func (s *Store) Save(ctx context.Context, sg saga.Saga) (saga.Saga, error) {
-	if !uuidShape.MatchString(sg.ID) {
+	if !saga.ValidID(sg.ID) {
 		return saga.Saga{}, out.ErrStale
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -97,7 +94,7 @@ func (s *Store) Save(ctx context.Context, sg saga.Saga) (saga.Saga, error) {
 
 // Get reads a saga of the tenant; one of another tenant, an unknown id or a text that is not an id is out.ErrNotFound.
 func (s *Store) Get(ctx context.Context, tenantID, id string) (saga.Saga, error) {
-	if !uuidShape.MatchString(id) || !uuidShape.MatchString(tenantID) {
+	if !saga.ValidID(id) || !saga.ValidID(tenantID) {
 		return saga.Saga{}, out.ErrNotFound
 	}
 	found, err := s.load(ctx, `WHERE saga_id = $1::text::uuid AND tenant_id = $2::text::uuid`, id, tenantID)

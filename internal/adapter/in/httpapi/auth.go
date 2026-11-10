@@ -5,12 +5,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/domain/saga"
 )
 
 const (
@@ -23,7 +24,6 @@ const (
 var (
 	errMissingSubject = errors.New("token has no subject")
 	errMalformedClaim = errors.New("token has a claim of the wrong type")
-	uuidPattern       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
 // Claims is what the routes may know about the caller.
@@ -37,7 +37,7 @@ type Claims struct {
 
 // isTenantAdministrator is true for an ordinary token with the role and a tenant that is an id: the tenant goes into a path and a query.
 func (c Claims) isTenantAdministrator() bool {
-	return c.Access == "" && slices.Contains(c.Roles, tenantAdministrator) && uuidPattern.MatchString(c.TenantID)
+	return c.Access == "" && slices.Contains(c.Roles, tenantAdministrator) && saga.ValidID(c.TenantID)
 }
 
 // Verifier validates the access tokens of the security service with its public key only: this service never holds the private key
