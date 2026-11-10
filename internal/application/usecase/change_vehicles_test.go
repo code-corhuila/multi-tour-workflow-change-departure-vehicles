@@ -302,6 +302,45 @@ func TestA_failed_restore_ends_failed_after_its_attempts(t *testing.T) {
 	}
 }
 
+// The preview changes nothing, but an answer that is not a clear yes or no is unclear all the same: the saga stays RUNNING and is asked
+// again like in every other step, and ends FAILED for a person after fifteen minutes.
+func TestA_an_unclear_preview_leaves_the_saga_running_and_ends_failed_after_fifteen_minutes(t *testing.T) {
+	r := newRig()
+	r.ops.previewErr = errors.New("connection reset")
+	s, _, err := r.uc.Start(context.Background(), cmd("key-0000001"))
+	if err != nil || s.Status != saga.Running || len(s.Steps) != 0 || len(r.res.calls) != 0 || len(r.ops.applies) != 0 {
+		t.Fatalf("status %s, steps %s, err %v, calls %d/%d", s.Status, steps(s), err, len(r.res.calls), len(r.ops.applies))
+	}
+	stored := r.store.byID[s.ID]
+	stored.CreatedAt, stored.UpdatedAt = now.Add(-20*time.Minute), now.Add(-20*time.Minute)
+	r.store.byID[s.ID] = stored
+
+	r.uc.Resume(context.Background(), now.Add(-2*time.Minute))
+	got := r.store.byID[s.ID]
+	if got.Status != saga.Failed || got.FailedStep != saga.LowerCeiling || got.Reason != saga.ParticipantUnavailable {
+		t.Fatalf("status %s, failed step %s, reason %s", got.Status, got.FailedStep, got.Reason)
+	}
+}
+
+// A refusal of the restore is an answer, not a network failure: trying it five times would only repeat the same refusal.
+func TestA_a_definite_refusal_of_the_restore_is_not_retried(t *testing.T) {
+	r := newRig()
+	r.ops.applyErr = out.ErrRefused
+	r.res.answer = func(n int, c ceilingCall) (out.CeilingResult, error) {
+		if n == 0 {
+			return out.CeilingResult{Previous: 18, Ceiling: c.Ceiling}, nil
+		}
+		return out.CeilingResult{}, out.ErrRefused
+	}
+	s, _, _ := r.uc.Start(context.Background(), cmd("key-0000001"))
+	if s.Status != saga.Failed || s.Reason != saga.CompensationFailed || s.FailedStep != saga.ApplyVehicles {
+		t.Fatalf("status %s, reason %s, failed step %s", s.Status, s.Reason, s.FailedStep)
+	}
+	if len(r.res.calls) != 2 {
+		t.Fatalf("%d ceiling calls: want the lowering and one try to restore, not five", len(r.res.calls))
+	}
+}
+
 // AC-WF5-01.5
 func TestA_a_stopped_saga_resumes_from_its_last_step(t *testing.T) {
 	r := newRig()
