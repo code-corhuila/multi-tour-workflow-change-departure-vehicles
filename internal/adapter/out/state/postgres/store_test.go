@@ -185,6 +185,26 @@ func TestI_open_names_the_kind_of_failure_and_never_the_connection_string(t *tes
 	}
 }
 
+// Limits left at zero would mean a connection that times out at once or no statement timeout at all: they are refused at start.
+func TestI_open_refuses_limits_that_are_not_positive(t *testing.T) {
+	url := "postgres://u:p@127.0.0.1:1/db?sslmode=disable"
+	for _, limits := range []postgres.Limits{{}, {MaxConns: 2, ConnectTimeout: time.Second}, {MaxConns: 2, StatementTimeout: time.Second},
+		{ConnectTimeout: time.Second, StatementTimeout: time.Second}} {
+		if _, err := postgres.Open(context.Background(), url, limits); err == nil || !contains(err.Error(), "limits") {
+			t.Fatalf("limits %+v: err %v, want a refusal that names the limits", limits, err)
+		}
+	}
+}
+
+func TestI_list_stale_with_no_room_returns_nothing(t *testing.T) {
+	store := postgres.NewStore(pgtest.Open(t))
+	for _, limit := range []int{0, -1} {
+		if got, err := store.ListStale(context.Background(), now, limit); err != nil || len(got) != 0 {
+			t.Fatalf("limit %d: %d sagas, err %v", limit, len(got), err)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
