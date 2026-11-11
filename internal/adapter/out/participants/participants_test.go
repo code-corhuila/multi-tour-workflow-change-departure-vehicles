@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	tenant  = "11111111-1111-4111-8111-111111111111"
-	vehicle = "33333333-3333-4333-8333-333333333333"
-	token   = "service-token-value"
+	tenant    = "11111111-1111-4111-8111-111111111111"
+	vehicle   = "33333333-3333-4333-8333-333333333333"
+	departure = "55555555-5555-4555-8555-555555555555"
+	token     = "service-token-value"
 )
 
 var cfg = participants.Config{Token: token, Timeout: time.Second, Attempts: 3}
@@ -72,12 +73,12 @@ const ceilingOK = `{"previousCeiling":18,"ceiling":10,"seatsHeld":7}`
 func TestC_participants_receive_the_service_token_the_tenant_and_a_derived_key(t *testing.T) {
 	srv := newServer(t, reply{200, ceilingOK})
 	ctx := correlation.With(context.Background(), "c0ffee00-0000-4000-8000-000000000001")
-	result, err := participants.NewReservations(srv.URL, cfg).SetCeiling(ctx, tenant, "SAL-013", 10, "saga-1:LOWER_CEILING")
+	result, err := participants.NewReservations(srv.URL, cfg).SetCeiling(ctx, tenant, departure, 10, "saga-1:LOWER_CEILING")
 	if err != nil || result.Previous != 18 || result.Ceiling != 10 || result.SeatsHeld != 7 {
 		t.Fatalf("result %+v, err %v", result, err)
 	}
 	got := srv.requests[0]
-	if got.Method != "PUT" || got.Path != "/api/v1/commercial-reservation/internal/tenants/"+tenant+"/departures/SAL-013/capacity-ceiling" ||
+	if got.Method != "PUT" || got.Path != "/api/v1/commercial-reservation/internal/tenants/"+tenant+"/departures/"+departure+"/capacity-ceiling" ||
 		got.Auth != "Bearer "+token || got.Key != "saga-1:LOWER_CEILING" || got.Correlation != "c0ffee00-0000-4000-8000-000000000001" ||
 		!strings.HasPrefix(got.ContentType, "application/json") || got.Body["ceiling"] != float64(10) {
 		t.Fatalf("request %+v", got)
@@ -85,10 +86,10 @@ func TestC_participants_receive_the_service_token_the_tenant_and_a_derived_key(t
 }
 
 func TestC_operations_receives_the_preview_and_the_whole_new_set_of_vehicles(t *testing.T) {
-	srv := newServer(t, reply{200, `{"currentEffectiveCapacity":18,"newEffectiveCapacity":10}`}, reply{200, `{"departureCode":"SAL-013"}`})
+	srv := newServer(t, reply{200, `{"currentEffectiveCapacity":18,"newEffectiveCapacity":10,"departureId":"55555555-5555-4555-8555-555555555555"}`}, reply{200, `{"departureCode":"SAL-013"}`})
 	ops := participants.NewOperations(srv.URL, cfg)
 	preview, err := ops.PreviewChange(context.Background(), tenant, "SAL-013", []string{vehicle})
-	if err != nil || preview.CurrentEffectiveCapacity != 18 || preview.NewEffectiveCapacity != 10 {
+	if err != nil || preview.CurrentEffectiveCapacity != 18 || preview.NewEffectiveCapacity != 10 || preview.DepartureID != departure {
 		t.Fatalf("preview %+v, err %v", preview, err)
 	}
 	if err := ops.ApplyChange(context.Background(), tenant, "SAL-013", []string{vehicle}, "saga-1:APPLY_VEHICLES"); err != nil {
@@ -141,7 +142,7 @@ func TestC_definite_answers_become_the_sentinels_of_the_port(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newServer(t, tc.rep)
-			_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+			_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err %v, want %v", err, tc.want)
 			}
@@ -157,7 +158,7 @@ func TestC_definite_answers_become_the_sentinels_of_the_port(t *testing.T) {
 func TestC_a_refused_token_is_an_unclear_answer_not_a_refusal(t *testing.T) {
 	for _, status := range []int{401, 403} {
 		srv := newServer(t, reply{status, `{"error":"FORBIDDEN","message":"x","traceId":"t"}`})
-		_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+		_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1")
 		if err == nil || errors.Is(err, out.ErrRefused) || errors.Is(err, out.ErrNotFound) || errors.Is(err, out.ErrSeatsHeld) {
 			t.Fatalf("status %d: err %v, want an unclear answer", status, err)
 		}
@@ -193,7 +194,7 @@ func TestC_a_422_of_operations_is_a_refusal_of_the_change_and_a_404_an_unknown_d
 func TestC_transient_answers_are_repeated_with_the_same_key_and_then_succeed(t *testing.T) {
 	for _, status := range []int{500, 502, 503, 429} {
 		srv := newServer(t, reply{status, `{}`}, reply{200, ceilingOK})
-		result, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "same-key-1")
+		result, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "same-key-1")
 		if err != nil || result.Previous != 18 || srv.count() != 2 || srv.requests[0].Key != srv.requests[1].Key {
 			t.Fatalf("status %d: result %+v, err %v, requests %d", status, result, err, srv.count())
 		}
@@ -203,7 +204,7 @@ func TestC_transient_answers_are_repeated_with_the_same_key_and_then_succeed(t *
 // An answer that stays unclear after the attempts is an error that is none of the sentinels: the saga does not read it as a refusal.
 func TestC_an_answer_that_stays_unclear_is_not_a_refusal_and_leaks_nothing(t *testing.T) {
 	srv := newServer(t, reply{503, `{"error":"X","message":"jdbc:postgresql://db:5432 password=hunter2"}`})
-	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1")
 	if err == nil || errors.Is(err, out.ErrSeatsHeld) || errors.Is(err, out.ErrRefused) || errors.Is(err, out.ErrNotFound) {
 		t.Fatalf("err %v: want an unclear error", err)
 	}
@@ -216,7 +217,7 @@ func TestC_a_server_that_is_down_is_an_unclear_answer(t *testing.T) {
 	srv := newServer(t, reply{200, ceilingOK})
 	url := srv.URL
 	srv.Close()
-	_, err := participants.NewReservations(url, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+	_, err := participants.NewReservations(url, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1")
 	if err == nil || errors.Is(err, out.ErrRefused) || errors.Is(err, out.ErrNotFound) || errors.Is(err, out.ErrSeatsHeld) {
 		t.Fatalf("err %v", err)
 	}
@@ -229,7 +230,7 @@ func TestC_a_redirect_is_not_followed(t *testing.T) {
 	srv.Server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, elsewhere.URL+"/x", http.StatusTemporaryRedirect)
 	})
-	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1")
+	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1")
 	if err == nil || elsewhere.count() != 0 {
 		t.Fatalf("err %v, requests that reached the other host: %d", err, elsewhere.count())
 	}
@@ -239,7 +240,7 @@ func TestC_a_cancelled_context_stops_the_attempts(t *testing.T) {
 	srv := newServer(t, reply{503, `{}`})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(ctx, tenant, "SAL-013", 10, "k-1")
+	_, err := participants.NewReservations(srv.URL, cfg).SetCeiling(ctx, tenant, departure, 10, "k-1")
 	if err == nil || srv.count() > 1 {
 		t.Fatalf("err %v, %d requests", err, srv.count())
 	}
@@ -248,11 +249,35 @@ func TestC_a_cancelled_context_stops_the_attempts(t *testing.T) {
 // An accepted answer that has not the fields the saga needs is not a yes.
 func TestC_an_accepted_answer_without_its_fields_is_unclear(t *testing.T) {
 	srv := newServer(t, reply{200, `{"hello":"world"}`})
-	if _, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1"); err == nil ||
+	if _, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, departure, 10, "k-1"); err == nil ||
 		errors.Is(err, out.ErrRefused) {
 		t.Fatalf("err %v", err)
 	}
 	if _, err := participants.NewOperations(srv.URL, cfg).PreviewChange(context.Background(), tenant, "SAL-013", []string{vehicle}); err == nil {
 		t.Fatal("a preview without its fields was accepted")
+	}
+}
+
+// The ceiling route of commercial-reservation takes the salidaId: a code like SAL-013 would be a 404 there, so it is refused before any call.
+func TestC_the_ceiling_route_takes_the_departure_id_and_refuses_a_code(t *testing.T) {
+	srv := newServer(t, reply{200, ceilingOK})
+	if _, err := participants.NewReservations(srv.URL, cfg).SetCeiling(context.Background(), tenant, "SAL-013", 10, "k-1"); !errors.Is(err, out.ErrRefused) {
+		t.Fatalf("err %v, want ErrRefused for a code", err)
+	}
+	if srv.count() != 0 {
+		t.Fatalf("%d calls were made with a code", srv.count())
+	}
+}
+
+// The preview is where the saga learns the id: an answer that has no valid one is not a yes, so nothing is called with a guess.
+func TestC_a_preview_without_a_valid_departure_id_is_unclear(t *testing.T) {
+	for _, body := range []string{`{"currentEffectiveCapacity":18,"newEffectiveCapacity":10}`,
+		`{"currentEffectiveCapacity":18,"newEffectiveCapacity":10,"departureId":"SAL-013"}`,
+		`{"currentEffectiveCapacity":18,"newEffectiveCapacity":10,"departureId":null}`} {
+		srv := newServer(t, reply{200, body})
+		_, err := participants.NewOperations(srv.URL, cfg).PreviewChange(context.Background(), tenant, "SAL-013", []string{vehicle})
+		if err == nil || errors.Is(err, out.ErrRefused) || errors.Is(err, out.ErrNotFound) {
+			t.Fatalf("body %s: err %v, want an unclear answer", body, err)
+		}
 	}
 }
