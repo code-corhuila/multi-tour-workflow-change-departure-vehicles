@@ -185,6 +185,15 @@ steps_follow_their_saga() {
   psql_admin -c "DELETE FROM $T WHERE saga_id = '$S1'" >/dev/null || return 1
   [ "$(psql_admin -c "SELECT count(*) FROM ${T}_step")" = 0 ] || { echo "the steps did not follow their saga"; return 1; }
 }
+the_departure_id_of_commercial_reservation_is_kept_and_optional() {
+  clean
+  [ "$(psql_admin -c "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'workflow_change_departure_vehicles' AND table_name = 'change_departure_vehicles_saga' AND column_name = 'departure_id'")" = "uuid:YES" ] || { echo "departure_id is not a nullable uuid column"; return 1; }
+  # a saga that did not need to lower the ceiling never learns the id, so it stays empty
+  psql_admin -c "$(saga $S1 $KEY1)" >/dev/null || return 1
+  [ "$(psql_admin -c "SELECT departure_id IS NULL FROM $T WHERE saga_id = '$S1'")" = t ] || { echo "departure_id has a default, it must start empty"; return 1; }
+  psql_admin -c "INSERT INTO $T (saga_id, idempotency_key, tenant_id, departure_code, vehicle_ids, departure_id) VALUES ('$S2', '$KEY2', '$TENANT', 'SAL-002', ARRAY['$VEHICLE']::uuid[], '$GHOST')" >/dev/null || return 1
+  [ "$(psql_admin -c "SELECT departure_id::text FROM $T WHERE saga_id = '$S2'")" = "$GHOST" ] || { echo "departure_id was not kept"; return 1; }
+}
 the_app_user_writes_the_tables_and_the_index_exists() {
   for t in change_departure_vehicles_saga change_departure_vehicles_saga_step; do
     for p in INSERT UPDATE; do
@@ -222,6 +231,7 @@ check "I·the_request_is_bounded" the_request_is_bounded
 check "I·failure_detail_is_bounded" failure_detail_is_bounded
 check "I·a_step_is_recorded_once_with_a_known_name_number_and_status" a_step_is_recorded_once_with_a_known_name_number_and_status
 check "I·steps_follow_their_saga" steps_follow_their_saga
+check "I·the_departure_id_of_commercial_reservation_is_kept_and_optional" the_departure_id_of_commercial_reservation_is_kept_and_optional
 check "I·the_app_user_writes_the_tables_and_the_index_exists" the_app_user_writes_the_tables_and_the_index_exists
 clean
 check "I·db_ci_rolls_back_to_empty" rolled_back_to_empty
