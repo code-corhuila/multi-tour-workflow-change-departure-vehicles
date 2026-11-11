@@ -281,3 +281,12 @@ func TestC_a_preview_without_a_valid_departure_id_is_unclear(t *testing.T) {
 		}
 	}
 }
+
+// A negative capacity cannot be a ceiling and would fail the table of the saga: it is not a yes.
+func TestC_a_preview_with_a_negative_capacity_is_unclear(t *testing.T) {
+	srv := newServer(t, reply{200, `{"currentEffectiveCapacity":18,"newEffectiveCapacity":-1,"departureId":"55555555-5555-4555-8555-555555555555"}`})
+	if _, err := participants.NewOperations(srv.URL, cfg).PreviewChange(context.Background(), tenant, "SAL-013", []string{vehicle}); err == nil ||
+		errors.Is(err, out.ErrRefused) {
+		t.Fatalf("err %v, want an unclear answer", err)
+	}
+}
