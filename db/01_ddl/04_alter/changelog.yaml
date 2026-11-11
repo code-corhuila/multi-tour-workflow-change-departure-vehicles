@@ -16,3 +16,20 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
             stripComments: false
+  - changeSet:
+      id: change-departure-vehicles-ddl-alter-002
+      author: Molina211
+      labels: "HU-WFL-005,ddl,alter"
+      comment: "The id of the departure that commercial-reservation takes on its ceiling route, kept to restore the ceiling after a restart."
+      changes:
+        - sqlFile:
+            path: 002_add_departure_id_to_saga.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/002_add_departure_id_to_saga.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false

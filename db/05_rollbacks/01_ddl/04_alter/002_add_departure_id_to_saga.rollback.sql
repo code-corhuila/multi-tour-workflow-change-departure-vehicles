@@ -1,0 +1,1 @@
+ALTER TABLE workflow_change_departure_vehicles.change_departure_vehicles_saga DROP COLUMN IF EXISTS departure_id;
