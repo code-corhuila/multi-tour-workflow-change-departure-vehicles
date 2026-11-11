@@ -14,7 +14,7 @@ import (
 
 var _ out.Store = (*Store)(nil)
 
-// Store keeps what the tables hold: ids, the departure, the vehicles, the ceilings, the status, the steps and a short reason code.
+// Store keeps what the tables hold: ids, the departure and its id, the vehicles, the ceilings, the status, the steps and a short reason code.
 // No column holds the text of a participant. Ids go in as text and are cast in SQL, so the driver never parses them.
 type Store struct{ pool *pgxpool.Pool }
 
@@ -24,7 +24,7 @@ const (
 	sagaTable = "workflow_change_departure_vehicles.change_departure_vehicles_saga"
 	stepTable = "workflow_change_departure_vehicles.change_departure_vehicles_saga_step"
 
-	sagaColumns = `saga_id::text, idempotency_key, tenant_id::text, departure_code, vehicle_ids::text[], previous_ceiling, new_ceiling,
+	sagaColumns = `saga_id::text, idempotency_key, tenant_id::text, departure_code, vehicle_ids::text[], previous_ceiling, new_ceiling, coalesce(departure_id::text, ''),
 		saga_status, coalesce(failed_step, ''), coalesce(failure_reason, ''), version, created_at, updated_at`
 )
 
@@ -45,7 +45,7 @@ func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, erro
 	return found[0], tag.RowsAffected() == 1, nil
 }
 
-// Save writes the ceilings, the status, the failure and the steps in one transaction. Only a RUNNING saga is written, and only from
+// Save writes the ceilings, the id of the departure, the status, the failure and the steps in one transaction. Only a RUNNING saga is written, and only from
 // the copy that is still the stored one (compare and swap on the version): a saga that ended is never overwritten and one moved by
 // another instance is refused, both as out.ErrStale. It returns the saga with its new version.
 func (s *Store) Save(ctx context.Context, sg saga.Saga) (saga.Saga, error) {
@@ -58,10 +58,10 @@ func (s *Store) Save(ctx context.Context, sg saga.Saga) (saga.Saga, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	tag, err := tx.Exec(ctx, `UPDATE `+sagaTable+` SET saga_status = $2, previous_ceiling = $3, new_ceiling = $4,
+	tag, err := tx.Exec(ctx, `UPDATE `+sagaTable+` SET saga_status = $2, previous_ceiling = $3, new_ceiling = $4, departure_id = nullif($9::text, '')::uuid,
 		failed_step = nullif($5::text, ''), failure_reason = nullif($6::text, ''), updated_at = $7, version = version + 1
 		WHERE saga_id = $1::text::uuid AND saga_status = 'RUNNING' AND version = $8`,
-		sg.ID, string(sg.Status), sg.PreviousCeiling, sg.TargetCeiling, string(sg.FailedStep), string(sg.Reason), sg.UpdatedAt, sg.Version)
+		sg.ID, string(sg.Status), sg.PreviousCeiling, sg.TargetCeiling, string(sg.FailedStep), string(sg.Reason), sg.UpdatedAt, sg.Version, sg.DepartureID)
 	if err != nil {
 		return saga.Saga{}, err
 	}
@@ -125,7 +125,7 @@ func (s *Store) load(ctx context.Context, where string, args ...any) ([]saga.Sag
 	sagas, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (saga.Saga, error) {
 		var sg saga.Saga
 		var status, failed, reason string
-		err := r.Scan(&sg.ID, &sg.IdempotencyKey, &sg.TenantID, &sg.DepartureCode, &sg.VehicleIDs, &sg.PreviousCeiling, &sg.TargetCeiling,
+		err := r.Scan(&sg.ID, &sg.IdempotencyKey, &sg.TenantID, &sg.DepartureCode, &sg.VehicleIDs, &sg.PreviousCeiling, &sg.TargetCeiling, &sg.DepartureID,
 			&status, &failed, &reason, &sg.Version, &sg.CreatedAt, &sg.UpdatedAt)
 		sg.Status, sg.FailedStep, sg.Reason = saga.Status(status), saga.Step(failed), saga.Reason(reason)
 		return sg, err

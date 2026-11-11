@@ -42,14 +42,17 @@ type StepState struct {
 // TargetCeiling is the ceiling the saga asks for (nil when the change does not need to lower it).
 type Saga struct {
 	ID, TenantID, IdempotencyKey, DepartureCode string
-	VehicleIDs                                  []string
-	PreviousCeiling, TargetCeiling              *int
-	Status                                      Status
-	Steps                                       []StepState
-	FailedStep                                  Step
-	Reason                                      Reason
-	Version                                     int64
-	CreatedAt, UpdatedAt                        time.Time
+	// DepartureID is the salidaId that the preview of operations-cost gave; commercial-reservation takes it on its ceiling route. Empty until the
+	// saga decides to lower the ceiling.
+	DepartureID                    string
+	VehicleIDs                     []string
+	PreviousCeiling, TargetCeiling *int
+	Status                         Status
+	Steps                          []StepState
+	FailedStep                     Step
+	Reason                         Reason
+	Version                        int64
+	CreatedAt, UpdatedAt           time.Time
 }
 
 // New returns a saga that has just been asked for; the store gives it its id.

@@ -92,30 +92,45 @@ func (c *ChangeVehicles) run(ctx context.Context, s saga.Saga) (saga.Saga, error
 }
 
 // lowerCeiling is step 1: it asks operations-cost what the new vehicles give and, if that is fewer seats than today, lowers the
-// ceiling to it. commercial-reservation refuses when more seats are held, and then nothing has changed anywhere.
+// ceiling to it. commercial-reservation refuses when more seats are held, and then nothing has changed anywhere. The target and the id
+// of the departure are saved before the ceiling is called: if the answer is lost and the saga is asked again, it repeats the same call
+// with the same key and does not decide again from a preview that the vehicles may have changed.
 func (c *ChangeVehicles) lowerCeiling(ctx context.Context, s saga.Saga) (saga.Saga, bool, error) {
-	preview, err := c.operations.PreviewChange(ctx, s.TenantID, s.DepartureCode, s.VehicleIDs)
-	if err != nil {
-		if !definite(err) {
-			// the preview changes nothing, but an unclear answer is unclear in every step: the saga stays running and is asked again
-			ended, endErr := c.unclear(ctx, s, saga.LowerCeiling, err)
+	if s.TargetCeiling == nil {
+		preview, err := c.operations.PreviewChange(ctx, s.TenantID, s.DepartureCode, s.VehicleIDs)
+		if err != nil {
+			if !definite(err) {
+				// the preview changes nothing, but an unclear answer is unclear in every step: the saga stays running and is asked again
+				ended, endErr := c.unclear(ctx, s, saga.LowerCeiling, err)
+				return ended, true, endErr
+			}
+			ended, endErr := c.end(ctx, s, saga.Compensated, saga.LowerCeiling, reasonOf(err))
+			if errors.Is(err, out.ErrNotFound) {
+				return ended, true, errors.Join(out.ErrNotFound, endErr)
+			}
 			return ended, true, endErr
 		}
-		ended, endErr := c.end(ctx, s, saga.Compensated, saga.LowerCeiling, reasonOf(err))
-		if errors.Is(err, out.ErrNotFound) {
-			return ended, true, errors.Join(out.ErrNotFound, endErr)
+		if preview.NewEffectiveCapacity >= preview.CurrentEffectiveCapacity {
+			// adding seats cannot oversell: the ceiling stays and operations-cost tells commercial-reservation the new total afterwards
+			s.Done(saga.LowerCeiling, c.clock())
+			saved, err := c.store.Save(ctx, s)
+			return saved, false, err
 		}
-		return ended, true, endErr
-	}
-	if preview.NewEffectiveCapacity >= preview.CurrentEffectiveCapacity {
-		// adding seats cannot oversell: the ceiling stays and operations-cost tells commercial-reservation the new total afterwards
-		s.Done(saga.LowerCeiling, c.clock())
+		if !saga.ValidID(preview.DepartureID) || preview.NewEffectiveCapacity < 0 {
+			// a target that cannot be sent is not saved: the saga stays running, is asked again and gives up like any unclear answer
+			ended, endErr := c.unclear(ctx, s, saga.LowerCeiling, errors.New("the preview has no usable departure id or capacity"))
+			return ended, true, endErr
+		}
+		target := preview.NewEffectiveCapacity
+		s.TargetCeiling, s.DepartureID = &target, preview.DepartureID
+		s.UpdatedAt = c.clock()
 		saved, err := c.store.Save(ctx, s)
-		return saved, false, err
+		if err != nil {
+			return saved, false, err
+		}
+		s = saved
 	}
-	target := preview.NewEffectiveCapacity
-	s.TargetCeiling = &target // kept with the step, as the record of what was asked
-	result, err := c.reservations.SetCeiling(ctx, s.TenantID, s.DepartureCode, target, s.ID+":LOWER_CEILING")
+	result, err := c.reservations.SetCeiling(ctx, s.TenantID, s.DepartureID, *s.TargetCeiling, s.ID+":LOWER_CEILING")
 	if err != nil {
 		if !definite(err) {
 			ended, endErr := c.unclear(ctx, s, saga.LowerCeiling, err)
@@ -151,7 +166,7 @@ func (c *ChangeVehicles) compensate(ctx context.Context, s saga.Saga, reason sag
 		return c.end(ctx, s, saga.Compensated, saga.ApplyVehicles, reason)
 	}
 	for attempt := 1; attempt <= restoreAttempts; attempt++ {
-		_, err := c.reservations.SetCeiling(ctx, s.TenantID, s.DepartureCode, *s.PreviousCeiling, s.ID+":LOWER_CEILING:undo")
+		_, err := c.reservations.SetCeiling(ctx, s.TenantID, s.DepartureID, *s.PreviousCeiling, s.ID+":LOWER_CEILING:undo")
 		if err == nil {
 			s.Undone(saga.LowerCeiling, c.clock())
 			return c.end(ctx, s, saga.Compensated, saga.ApplyVehicles, reason)
