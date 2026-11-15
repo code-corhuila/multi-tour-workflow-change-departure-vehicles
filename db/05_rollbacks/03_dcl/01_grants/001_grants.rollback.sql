@@ -1,0 +1,5 @@
+REVOKE workflow_change_departure_vehicles_writer FROM workflow_change_departure_vehicles_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA workflow_change_departure_vehicles REVOKE SELECT, INSERT, UPDATE ON TABLES FROM workflow_change_departure_vehicles_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA workflow_change_departure_vehicles REVOKE SELECT ON TABLES FROM workflow_change_departure_vehicles_reader;
+REVOKE ALL ON ALL TABLES IN SCHEMA workflow_change_departure_vehicles FROM workflow_change_departure_vehicles_reader, workflow_change_departure_vehicles_writer;
+REVOKE ALL ON SCHEMA workflow_change_departure_vehicles FROM workflow_change_departure_vehicles_reader, workflow_change_departure_vehicles_writer;

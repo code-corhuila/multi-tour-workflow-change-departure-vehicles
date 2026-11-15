@@ -1,0 +1,2 @@
+DROP ROLE IF EXISTS workflow_change_departure_vehicles_writer;
+DROP ROLE IF EXISTS workflow_change_departure_vehicles_reader;
