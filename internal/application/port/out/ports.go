@@ -23,11 +23,15 @@ type CeilingResult struct{ Previous, Ceiling, SeatsHeld int }
 // Reservations is commercial-reservation, which owns the ceiling of seats of a departure.
 type Reservations interface {
 	// SetCeiling sets the ceiling; it is repeatable with the same key, and it refuses with ErrSeatsHeld when more seats are held.
-	SetCeiling(ctx context.Context, tenantID, departureCode string, ceiling int, idempotencyKey string) (CeilingResult, error)
+	SetCeiling(ctx context.Context, tenantID, departureID string, ceiling int, idempotencyKey string) (CeilingResult, error)
 }
 
 // Preview is what a change of vehicles would do to the seats of the departure; it changes nothing.
-type Preview struct{ CurrentEffectiveCapacity, NewEffectiveCapacity int }
+// DepartureID is the salidaId of the departure: only operations-cost, which owns the departures, says it, and the ceiling route needs it.
+type Preview struct {
+	CurrentEffectiveCapacity, NewEffectiveCapacity int
+	DepartureID                                    string
+}
 
 // Operations is operations-cost, which owns the vehicles of a departure.
 type Operations interface {

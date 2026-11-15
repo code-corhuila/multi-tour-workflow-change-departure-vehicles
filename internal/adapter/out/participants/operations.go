@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/application/port/out"
+	"github.com/code-corhuila/multi-tour-workflow-change-departure-vehicles/internal/domain/saga"
 )
 
 const operationsPrefix = "/api/v1/operations-cost"
@@ -20,7 +21,8 @@ func NewOperations(baseURL string, cfg Config) *Operations {
 	return &Operations{newClient(baseURL, cfg)}
 }
 
-// PreviewChange asks what the new set of vehicles would give; it changes nothing (plan D-03).
+// PreviewChange asks what the new set of vehicles would give and which salidaId the departure has; it changes nothing (plan D-03). An answer
+// without a valid salidaId, or with a negative capacity, is not a yes: the ceiling route cannot be called with a guess.
 func (o *Operations) PreviewChange(ctx context.Context, tenantID, departureCode string, vehicleIDs []string) (out.Preview, error) {
 	path, err := departurePath(operationsPrefix, tenantID, departureCode, "/vehicle-changes/preview")
 	if err != nil {
@@ -36,11 +38,16 @@ func (o *Operations) PreviewChange(ctx context.Context, tenantID, departureCode 
 		}
 		return out.Preview{}, errUnclear("status " + strconv.Itoa(status))
 	}
-	var answer struct{ CurrentEffectiveCapacity, NewEffectiveCapacity *int }
-	if json.Unmarshal(reply, &answer) != nil || answer.CurrentEffectiveCapacity == nil || answer.NewEffectiveCapacity == nil {
+	var answer struct {
+		CurrentEffectiveCapacity, NewEffectiveCapacity *int
+		DepartureID                                    string
+	}
+	if json.Unmarshal(reply, &answer) != nil || answer.CurrentEffectiveCapacity == nil || answer.NewEffectiveCapacity == nil ||
+		*answer.CurrentEffectiveCapacity < 0 || *answer.NewEffectiveCapacity < 0 || !saga.ValidID(answer.DepartureID) {
 		return out.Preview{}, errUnclear("the answer has not its fields")
 	}
-	return out.Preview{CurrentEffectiveCapacity: *answer.CurrentEffectiveCapacity, NewEffectiveCapacity: *answer.NewEffectiveCapacity}, nil
+	return out.Preview{CurrentEffectiveCapacity: *answer.CurrentEffectiveCapacity, NewEffectiveCapacity: *answer.NewEffectiveCapacity,
+		DepartureID: answer.DepartureID}, nil
 }
 
 // ApplyChange puts the whole new set of vehicles on the departure; the key makes a repeat safe.
