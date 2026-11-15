@@ -96,6 +96,11 @@ func (c *ChangeVehicles) run(ctx context.Context, s saga.Saga) (saga.Saga, error
 func (c *ChangeVehicles) lowerCeiling(ctx context.Context, s saga.Saga) (saga.Saga, bool, error) {
 	preview, err := c.operations.PreviewChange(ctx, s.TenantID, s.DepartureCode, s.VehicleIDs)
 	if err != nil {
+		if !definite(err) {
+			// the preview changes nothing, but an unclear answer is unclear in every step: the saga stays running and is asked again
+			ended, endErr := c.unclear(ctx, s, saga.LowerCeiling, err)
+			return ended, true, endErr
+		}
 		ended, endErr := c.end(ctx, s, saga.Compensated, saga.LowerCeiling, reasonOf(err))
 		if errors.Is(err, out.ErrNotFound) {
 			return ended, true, errors.Join(out.ErrNotFound, endErr)
@@ -139,7 +144,8 @@ func (c *ChangeVehicles) applyVehicles(ctx context.Context, s saga.Saga) (saga.S
 }
 
 // compensate undoes step 1 if it changed the ceiling. The saga ends COMPENSATED when it could, FAILED when the ceiling could not be
-// restored in time, so that a person decides.
+// restored in time, so that a person decides. A restore that fails without a clear answer is tried again here, inside the loop, and not
+// left RUNNING like the other steps: the ceiling is the part that can oversell, so it is not left to the resumption.
 func (c *ChangeVehicles) compensate(ctx context.Context, s saga.Saga, reason saga.Reason) (saga.Saga, error) {
 	if s.PreviousCeiling == nil {
 		return c.end(ctx, s, saga.Compensated, saga.ApplyVehicles, reason)
@@ -151,6 +157,9 @@ func (c *ChangeVehicles) compensate(ctx context.Context, s saga.Saga, reason sag
 			return c.end(ctx, s, saga.Compensated, saga.ApplyVehicles, reason)
 		}
 		c.log.WarnContext(ctx, "restoring the ceiling failed", "sagaId", s.ID, "attempt", attempt, "error", err.Error())
+		if definite(err) {
+			break // a refusal is an answer: trying again would only repeat it
+		}
 	}
 	return c.end(ctx, s, saga.Failed, saga.ApplyVehicles, saga.CompensationFailed)
 }
