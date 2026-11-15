@@ -148,7 +148,7 @@ func (h *handler) item(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if !uuidPattern.MatchString(id) {
+	if !saga.ValidID(id) {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "saga not found")
 		return
 	}
