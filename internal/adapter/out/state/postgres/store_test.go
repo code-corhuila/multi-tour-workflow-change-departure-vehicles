@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	tenant  = "11111111-1111-4111-8111-111111111111"
-	other   = "22222222-2222-4222-8222-222222222222"
-	vehicle = "33333333-3333-4333-8333-333333333333"
-	second  = "44444444-4444-4444-8444-444444444444"
+	tenant    = "11111111-1111-4111-8111-111111111111"
+	other     = "22222222-2222-4222-8222-222222222222"
+	vehicle   = "33333333-3333-4333-8333-333333333333"
+	second    = "44444444-4444-4444-8444-444444444444"
+	departure = "55555555-5555-4555-8555-555555555555"
 )
 
 var now = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
@@ -38,7 +39,7 @@ func TestI_a_saga_is_created_and_read_back_whole(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.DepartureCode != "SAL-013" || len(got.VehicleIDs) != 2 || got.VehicleIDs[1] != second || got.TenantID != tenant ||
-		got.IdempotencyKey != "key-0000001" || !got.CreatedAt.Equal(now) || got.PreviousCeiling != nil || got.TargetCeiling != nil {
+		got.IdempotencyKey != "key-0000001" || !got.CreatedAt.Equal(now) || got.PreviousCeiling != nil || got.TargetCeiling != nil || got.DepartureID != "" {
 		t.Fatalf("read back %+v", got)
 	}
 }
@@ -64,7 +65,7 @@ func TestI_steps_ceilings_and_the_end_are_persisted(t *testing.T) {
 	ctx := context.Background()
 	s, _, _ := store.Create(ctx, newSaga(tenant, "key-0000001"))
 	previous, target := 18, 10
-	s.PreviousCeiling, s.TargetCeiling = &previous, &target
+	s.PreviousCeiling, s.TargetCeiling, s.DepartureID = &previous, &target, departure
 	s.Done(saga.LowerCeiling, now.Add(time.Second))
 	s, err := store.Save(ctx, s)
 	if err != nil || s.Version != 1 {
@@ -81,7 +82,7 @@ func TestI_steps_ceilings_and_the_end_are_persisted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Status != saga.Compensated || got.FailedStep != saga.ApplyVehicles || got.Reason != saga.VehiclesRefused ||
-		got.PreviousCeiling == nil || *got.PreviousCeiling != 18 || got.TargetCeiling == nil || *got.TargetCeiling != 10 ||
+		got.PreviousCeiling == nil || *got.PreviousCeiling != 18 || got.TargetCeiling == nil || *got.TargetCeiling != 10 || got.DepartureID != departure ||
 		len(got.Steps) != 1 || got.Steps[0].Name != saga.LowerCeiling || !got.Steps[0].Compensated || !got.UpdatedAt.Equal(now.Add(3*time.Second)) {
 		t.Fatalf("read back %+v", got)
 	}

@@ -21,14 +21,15 @@ const (
 	otherTone = "22222222-2222-4222-8222-222222222222"
 	vehicle   = "33333333-3333-4333-8333-333333333333"
 	code      = "SAL-013"
+	departure = "55555555-5555-4555-8555-555555555555"
 )
 
 var now = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
 
 type ceilingCall struct {
-	Tenant, Code string
-	Ceiling      int
-	Key          string
+	Tenant, Departure string
+	Ceiling           int
+	Key               string
 }
 
 // fakeReservations is commercial-reservation: it answers as told and records every call.
@@ -38,8 +39,8 @@ type fakeReservations struct {
 	answer func(n int, c ceilingCall) (out.CeilingResult, error)
 }
 
-func (f *fakeReservations) SetCeiling(_ context.Context, tenantID, departureCode string, ceiling int, key string) (out.CeilingResult, error) {
-	c := ceilingCall{tenantID, departureCode, ceiling, key}
+func (f *fakeReservations) SetCeiling(_ context.Context, tenantID, departureID string, ceiling int, key string) (out.CeilingResult, error) {
+	c := ceilingCall{tenantID, departureID, ceiling, key}
 	f.calls = append(f.calls, c)
 	if f.answer == nil {
 		return out.CeilingResult{Previous: 18, Ceiling: ceiling}, nil
@@ -76,9 +77,11 @@ func (f *fakeOperations) ApplyChange(_ context.Context, tenantID, departureCode 
 
 // memStore keeps the sagas in memory with the version rule of the real store.
 type memStore struct {
-	byID   map[string]saga.Saga
-	saves  int
-	nextID int
+	byID  map[string]saga.Saga
+	saves int
+	// failSave, when above 0, is the number of the Save call (1 is the first) that is refused as stale, as if another instance had moved the saga
+	failSave, attempts int
+	nextID             int
 	// listing, when set, is what ListStale answers: the copies another instance may have already changed
 	listing []saga.Saga
 }
@@ -98,6 +101,10 @@ func (m *memStore) Create(_ context.Context, s saga.Saga) (saga.Saga, bool, erro
 }
 
 func (m *memStore) Save(_ context.Context, s saga.Saga) (saga.Saga, error) {
+	m.attempts++
+	if m.attempts == m.failSave {
+		return saga.Saga{}, out.ErrStale
+	}
 	if m.byID[s.ID].Version != s.Version {
 		return saga.Saga{}, out.ErrStale
 	}
@@ -136,7 +143,7 @@ type rig struct {
 
 // newRig starts with a departure of 18 seats whose new vehicles give 10.
 func newRig() *rig {
-	r := &rig{res: &fakeReservations{}, ops: &fakeOperations{preview: out.Preview{CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 10}}, store: newStore()}
+	r := &rig{res: &fakeReservations{}, ops: &fakeOperations{preview: out.Preview{CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 10, DepartureID: departure}}, store: newStore()}
 	r.uc = usecase.NewChangeVehicles(r.res, r.ops, r.store, func() time.Time { return now }, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	return r
 }
@@ -170,7 +177,7 @@ func TestA_ceiling_is_lowered_first_then_the_vehicles_are_changed(t *testing.T) 
 
 func TestA_a_change_that_adds_seats_does_not_lower_the_ceiling(t *testing.T) {
 	r := newRig()
-	r.ops.preview = out.Preview{CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 30}
+	r.ops.preview = out.Preview{CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 30, DepartureID: departure}
 	s, _, err := r.uc.Start(context.Background(), cmd("key-0000001"))
 	if err != nil || s.Status != saga.Completed {
 		t.Fatalf("status %s, err %v", s.Status, err)
@@ -209,7 +216,7 @@ func TestA_step_two_failure_restores_the_previous_ceiling(t *testing.T) {
 	if s.Status != saga.Compensated || s.FailedStep != saga.ApplyVehicles || s.Reason != saga.VehiclesRefused {
 		t.Fatalf("status %s, failed step %s, reason %s", s.Status, s.FailedStep, s.Reason)
 	}
-	if len(r.res.calls) != 2 || r.res.calls[1].Ceiling != 18 {
+	if len(r.res.calls) != 2 || r.res.calls[1].Ceiling != 18 || r.res.calls[1].Departure != departure || r.res.calls[1].Key != s.ID+":LOWER_CEILING:undo" {
 		t.Fatalf("ceiling calls %+v: want the second to restore 18", r.res.calls)
 	}
 	if !s.Steps[0].Compensated {
@@ -413,8 +420,8 @@ func TestA_participants_get_the_tenant_and_a_derived_key(t *testing.T) {
 	s, _, _ := r.uc.Start(context.Background(), cmd("key-0000001"))
 	wantKeys := []string{s.ID + ":LOWER_CEILING", s.ID + ":LOWER_CEILING:undo"}
 	for i, c := range r.res.calls {
-		if c.Tenant != tenant || c.Code != code || c.Key != wantKeys[i] {
-			t.Fatalf("ceiling call %d = %+v, want tenant %s, code %s, key %s", i, c, tenant, code, wantKeys[i])
+		if c.Tenant != tenant || c.Departure != departure || c.Key != wantKeys[i] {
+			t.Fatalf("ceiling call %d = %+v, want tenant %s, departure %s, key %s", i, c, tenant, departure, wantKeys[i])
 		}
 	}
 	if a := r.ops.applies[0]; a.Tenant != tenant || a.Key != s.ID+":APPLY_VEHICLES" || len(a.Vehicles) != 1 {
@@ -453,8 +460,8 @@ func TestA_a_change_the_preview_refuses_changes_nothing(t *testing.T) {
 func TestA_state_is_saved_after_each_step(t *testing.T) {
 	r := newRig()
 	r.uc.Start(context.Background(), cmd("key-0000001"))
-	if r.store.saves != 2 {
-		t.Fatalf("%d saves: want one after step 1 and one when step 2 ends the saga", r.store.saves)
+	if r.store.saves != 3 {
+		t.Fatalf("%d saves: want one before the ceiling call, one after step 1 and one when step 2 ends the saga", r.store.saves)
 	}
 }
 
@@ -466,5 +473,77 @@ func TestA_get_reads_only_the_saga_of_the_tenant(t *testing.T) {
 	}
 	if _, err := r.uc.Get(context.Background(), otherTone, s.ID); !errors.Is(err, out.ErrNotFound) {
 		t.Fatalf("err %v, want ErrNotFound for another tenant", err)
+	}
+}
+
+// The ceiling route takes the id of the departure that the preview gave, and the saga keeps it with the target before the call: a restart
+// after a lost answer then asks again with the same value, and does not decide again from a preview that may have changed.
+func TestA_the_target_and_the_departure_id_are_saved_before_the_ceiling_is_called(t *testing.T) {
+	r := newRig()
+	r.res.answer = func(n int, c ceilingCall) (out.CeilingResult, error) {
+		saved := r.store.byID["saga-1"]
+		if n == 0 && (saved.TargetCeiling == nil || *saved.TargetCeiling != 10 || saved.DepartureID != departure) {
+			t.Errorf("at the first call the stored saga has target %v and departure id %q", saved.TargetCeiling, saved.DepartureID)
+		}
+		return out.CeilingResult{Previous: 18, Ceiling: c.Ceiling}, nil
+	}
+	s, _, err := r.uc.Start(context.Background(), cmd("key-0000001"))
+	if err != nil || s.Status != saga.Completed || s.DepartureID != departure {
+		t.Fatalf("status %s, departure id %q, err %v", s.Status, s.DepartureID, err)
+	}
+}
+
+func TestA_a_lost_answer_is_asked_again_with_the_saved_target_the_same_key_and_no_new_preview(t *testing.T) {
+	r := newRig()
+	r.res.answer = func(n int, c ceilingCall) (out.CeilingResult, error) {
+		if n == 0 {
+			return out.CeilingResult{}, errors.New("connection reset") // commercial-reservation may have lowered it
+		}
+		return out.CeilingResult{Previous: 18, Ceiling: c.Ceiling}, nil
+	}
+	first, _, _ := r.uc.Start(context.Background(), cmd("key-0000001"))
+	stored := r.store.byID[first.ID]
+	stored.UpdatedAt = now.Add(-time.Hour)
+	r.store.byID[first.ID] = stored
+	// the vehicles on the preview have changed in between: the saga must not decide again
+	r.ops.preview = out.Preview{CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 6, DepartureID: departure}
+
+	if resumed, err := r.uc.Resume(context.Background(), now.Add(-2*time.Minute)); err != nil || resumed != 1 {
+		t.Fatalf("resumed %d, err %v", resumed, err)
+	}
+	got := r.store.byID[first.ID]
+	if got.Status != saga.Completed || r.ops.previews != 1 || len(r.res.calls) != 2 {
+		t.Fatalf("status %s, previews %d, ceiling calls %d: want COMPLETED, one preview and two ceiling calls", got.Status, r.ops.previews, len(r.res.calls))
+	}
+	if a, b := r.res.calls[0], r.res.calls[1]; b.Ceiling != 10 || b.Key != a.Key || b.Departure != departure {
+		t.Fatalf("calls %+v then %+v: want the same target 10, key and departure id", a, b)
+	}
+}
+
+// Another instance moved the saga between the preview and the save that comes before the call: nothing is called, because a call whose
+// target is not stored could not be repeated.
+func TestA_a_stale_save_before_the_ceiling_call_calls_nothing(t *testing.T) {
+	r := newRig()
+	r.store.failSave = 1
+	_, _, err := r.uc.Start(context.Background(), cmd("key-0000001"))
+	if !errors.Is(err, out.ErrStale) || len(r.res.calls) != 0 || len(r.ops.applies) != 0 {
+		t.Fatalf("err %v, ceiling calls %d, applies %d: want ErrStale and no call", err, len(r.res.calls), len(r.ops.applies))
+	}
+}
+
+// A preview that cannot be used to lower the ceiling (no valid id, a negative capacity) is not a yes: the saga stays running, asked again,
+// and gives up after fifteen minutes like any unclear answer; it never saves a target it cannot send.
+func TestA_a_preview_that_cannot_lower_the_ceiling_is_unclear(t *testing.T) {
+	for name, preview := range map[string]out.Preview{
+		"no departure id":   {CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 10},
+		"not an id":         {CurrentEffectiveCapacity: 18, NewEffectiveCapacity: 10, DepartureID: "SAL-013"},
+		"negative capacity": {CurrentEffectiveCapacity: 18, NewEffectiveCapacity: -1, DepartureID: departure},
+	} {
+		r := newRig()
+		r.ops.preview = preview
+		s, _, err := r.uc.Start(context.Background(), cmd("key-0000001"))
+		if err != nil || s.Status != saga.Running || s.TargetCeiling != nil || len(r.res.calls) != 0 || len(r.ops.applies) != 0 || r.store.saves != 0 {
+			t.Fatalf("%s: status %s, target %v, calls %d/%d, saves %d, err %v", name, s.Status, s.TargetCeiling, len(r.res.calls), len(r.ops.applies), r.store.saves, err)
+		}
 	}
 }
