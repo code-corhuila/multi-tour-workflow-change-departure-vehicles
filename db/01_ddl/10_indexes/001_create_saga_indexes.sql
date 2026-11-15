@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_change_departure_vehicles_saga_status_updated_at ON workflow_change_departure_vehicles.change_departure_vehicles_saga (saga_status, updated_at);
